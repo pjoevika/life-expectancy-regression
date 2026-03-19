@@ -1,0 +1,754 @@
+---
+title: "Modelling Global Life Expectancy from Health and Socioeconomic Factors Using Multiple Linear Regression"
+author: "Course: STAC67 | Instructor: Dr. So-hee Kang"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+header-includes:
+  - \usepackage{tabularx}
+---
+\begin{center}
+\textbf{Author:} \\ 
+  Vika Permata Joe\\
+  Kit Mak
+\end{center}
+\vspace{10cm}
+
+# Abstract
+
+Life expectancy is a key indicator of public health and socioeconomic development, shaped by factors such as disease burden, healthcare access, nutrition, and economic stability. This project aimed to build a statistically robust model to predict life expectancy across countries using WHO data from 2000–2015. After removing implausible values, high-missingness cases, and extreme outliers, we conducted exploratory data analysis and addressed multicollinearity using a systematic VIF-based elimination procedure. We developed several regression models, beginning with a main-effects model and progressing to an interaction model and finally a polynomial interaction model that incorporated nonlinear patterns and biologically meaningful interactions. Model comparison using $R^2$, $R_{adj}^2$, $C_p$, AIC, BIC, and PRESS identified the polynomial interaction model as the best-performing and most parsimonious. The model revealed strong effects of income distribution, deaths per 1,000 live births due to HIV/AIDS (ages 0–4), childhood health, and health expenditure, along with a nonlinear influence of adult mortality and key interactions involving HIV and childhood thinness. We acknowledge limitations related to missingness and filtering decisions, and propose methodological extensions for future research.
+
+# Background and Significance
+
+Life expectancy is a central indicator of population health and national development, reflecting the combined effects of healthcare access, economic conditions, vaccination coverage, nutrition, and disease burden. Countries with strong healthcare systems and equitable resource distribution tend to achieve longer lifespans, while those facing high infectious disease rates or inadequate infrastructure often experience shorter ones. Because of this, policymakers, researchers, and insurers rely on life expectancy to guide health interventions and risk assessments.
+
+Modeling life expectancy, however, is challenging. The underlying predictors are highly interdependent, often nonlinear, and frequently contain skewness, multicollinearity, or missingness—issues especially visible in the WHO global dataset. This complexity requires thoughtful preprocessing and advanced modeling strategies beyond simple linear regression.
+
+This project aims to address this challenge through the construction of increasingly sophisticated regression models that incorporate transformations, interactions, and nonlinear structure. Our goal is to answer the core question: **To what extent do socioeconomic, demographic, and health indicators predict global life expectancy, and which statistical modeling approach best captures these relationships?** The following sections describe our data preparation, exploratory analysis, and progression from main-effects to interaction and polynomial interaction models, culminating in the selection of the final model.
+
+# Exploratory Data Analysis
+
+The dataset contains about 2,900 observations with life expectancy as the response and a wide set of health, economic, demographic, and healthcare-related predictors. Our exploratory analysis focused on examining distributions and identifying impossible or inconsistent values.
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+# Package
+library(tidyverse)
+library(MASS)
+library(ggplot2)
+library(onewaytests)
+library(readxl)
+library(leaps)
+library(corrplot)
+library(MPV)
+library(olsrr)
+library(ggpubr)
+library(mice)
+library(Amelia)
+library(car)
+library(dplyr)
+library(lmtest)
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+# Load data set
+df_life <- read_csv("C:/Users/Vika Permata Joe/Documents/STATISTICS UOFT 23-27/Courses 23-24/Fall 2025/STAC67/Final Project/Life Expectancy Data.csv")
+
+df_life <- rename_all(df_life, tolower)
+names(df_life)
+
+df_life <- rename(df_life, life.expectancy = `life expectancy`,
+              adult.mortality = `adult mortality`, infant.deaths = `infant deaths`,
+              percentage.expenditure = `percentage expenditure`, 
+              hepatitis.b = `hepatitis b`, under.five.deaths = `under-five deaths`,
+              total.expenditure = `total expenditure`, hiv.aids = `hiv/aids`,
+              thinness.1.19.years = `thinness  1-19 years`, 
+              thinness.5.9.years = `thinness 5-9 years`, 
+              income.composition.of.resources = `income composition of resources`)
+
+names(df_life)
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+# Select numeric variables only
+numeric_vars <- df_life[sapply(df_life, is.numeric)]
+
+# List them
+names(numeric_vars)
+
+missing_count <- colSums(is.na(numeric_vars))
+missing_percent <- round(colMeans(is.na(numeric_vars)) * 100, 2)
+
+data.frame(Variable = names(numeric_vars),
+           Missing = missing_count,
+           Percent = missing_percent)
+
+# Hepatitis B has 18.82% missing, GDP has 15.25% missing, Population has 22.19%
+# Those rows are mostly small / developing countries (Vanuatu, Togo, etc.) - same as your dataset description
+# Missing data were from less-known countries… Finding data for these was difficult and hence, it was decided that we exclude these countries from the final model
+# polio, total.expenditure, diphtheria, thinness.1.19.years, thinness.5.9.years, income.composition.of.resources, schooling, adult.mortality, alcohol, bmi has less than 10% missing values, range from 0.34%-7.69%.
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+#BMI analysis
+bmioutliers <- df_life[df_life$bmi > 60 | df_life$bmi < 6.7, ]
+
+nrow(bmioutliers)/nrow(df_life)
+```
+
+Several variables showed severe data quality issues. BMI contained biologically impossible values (e.g., <6.7 or >60), affecting over 20% of observations, so it was removed. Some rate variables (infant deaths, under-five deaths, measles) exceeded 1000 per 1000 population and were deleted as impossible values. Population also contained extreme errors (e.g., very small values for large countries), so observations below 100,000 were excluded. Missingness was substantial for variables like Hepatitis B, GDP, and Population (>15%), and since the missingness was not random, cases with missing values were removed to avoid biased imputations.
+
+```{r, echo=FALSE, out.width="32%", fig.show='hold'}
+knitr::include_graphics(c("violin plots/row1/bmi.png", "violin plots/row1/infant.deaths.png", "violin plots/row1/under.five.deaths.png"))
+```
+```{r, echo=FALSE, out.width="32%", fig.show='hold'}
+knitr::include_graphics(c("violin plots/row1/polio.png", "violin plots/row1/diphtheria.png", "violin plots/row1/hepatitis.b.png"))
+```
+```{r, echo=FALSE, out.width="32%", fig.show='hold'}
+knitr::include_graphics(c("violin plots/row1/hiv.aids.png", "violin plots/row1/gdp.png", "violin plots/row1/total.expenditure.png"))
+```
+```{r, echo=FALSE, out.width="32%", fig.show='hold'}
+knitr::include_graphics(c("violin plots/row1/percentage.expenditure.png", "violin plots/row1/schooling.png", "violin plots/row1/population.png"))
+```
+```{r, echo=FALSE, out.width="32%", fig.show='hold'}
+knitr::include_graphics(c("violin plots/row1/thinness.1.19.years.png", "violin plots/row1/thinness.5.9.years.png", "violin plots/row1/alcohol.png"))
+```
+```{r, echo=FALSE, out.width="32%", fig.show='hold'}
+knitr::include_graphics(c("violin plots/row1/income.composition.of.resources.png", "violin plots/row1/adult.mortality.png", "violin plots/row1/measles.png"))
+```
+
+We used violin plots and histograms to examine the distribution of quantitative variables. Several variables—such as under-five deaths, deaths per 1,000 live births due to HIV/AIDS (ages 0–4), population, and healthcare expenditure—were strongly right-skewed, indicating a need for log-transformations. In contrast, variables such as the thinness indicators showed relatively symmetric distributions and did not require transformation.
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+#cleaned data set
+vars_to_impute <- c("polio", "total.expenditure", "diphtheria", "thinness.1.19.years", 
+                    "thinness.5.9.years", "income.composition.of.resources", "schooling", 
+                    "adult.mortality", "alcohol", "bmi")
+
+df_life_clean <- df_life %>% 
+  filter(!is.na(alcohol), !is.na(thinness.5.9.years), !is.na(gdp), !is.na(total.expenditure), 
+         !is.na(population), !is.na(hepatitis.b), 
+         schooling > 0, population > 100000, under.five.deaths > 0,
+         income.composition.of.resources > 0, income.composition.of.resources <= 1)
+```
+
+To address multicollinearity, we used VIF rather than simple correlations, since VIF captures joint collinearity across predictors. Using a threshold of 4, we iteratively removed variables with the highest VIF-such as infant deaths, GDP, hepatitis B, polio, thinness 1–19, and schooling-while keeping those most strongly related to life expectancy. This produced a stable predictor set with all VIF values below the threshold.
+
+```{r, warning=FALSE, message=FALSE,include=FALSE}
+# Correlation among remaining variables
+
+# Select continuous columns (exclude country, year, status)
+
+continuous_cols <- c(
+  "life.expectancy",
+  "adult.mortality", "infant.deaths", "alcohol", "percentage.expenditure",
+  "hepatitis.b", "measles", "under.five.deaths", "polio",
+  "total.expenditure", "diphtheria", "hiv.aids", "gdp", "population",
+  "thinness.1.19.years", "thinness.5.9.years", "income.composition.of.resources", "schooling"
+)
+
+data_cont <- df_life_clean[, continuous_cols]
+
+cor_matrix <- cor(data_cont, use = "complete.obs")
+
+corrplot(cor_matrix, method = "color", type = "lower",
+         tl.col = "black", tl.srt = 45,
+         title = "Correlation Heatmap: Continuous Predictors",
+         mar = c(0,0,1,0))
+
+```
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+missmap(data_cont)
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+fm <- lm(life.expectancy ~ alcohol + hepatitis.b + measles + thinness.5.9.years +
+     thinness.1.19.years + adult.mortality + infant.deaths + under.five.deaths
+   +total.expenditure + diphtheria + gdp + schooling + income.composition.of.resources +
+     percentage.expenditure + polio + population + hiv.aids + status, data = df_life_clean)
+
+vif(fm)
+summary(fm)
+
+# Infant deaths and deaths under five years old both have a high VIF, indicating a possible problem of multicolinearity. We can also see from the correlation heatmap that these two variables are highly correlated. Running a regression model containing both variables, we observe that the estimate for the coefficient of infant deaths is positive, while the estimate for the coefficient of under five year old deaths is negative. As a positive relationship between infant deaths and life expectancy does not make sense, there is a clear problem of multicolinearity. To solve this, we must choose one of the two variables to drop.
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+life_expectancy_cor <- cor_matrix["life.expectancy", ]
+
+sort(life_expectancy_cor, decreasing = TRUE)
+
+# As the correlation is stronger between Under five deaths and life expectancy than infant deaths and life expectancy, we drop infant deaths:
+
+fm1 <- lm(life.expectancy ~ alcohol + hepatitis.b + measles + thinness.5.9.years +
+     thinness.1.19.years + adult.mortality + under.five.deaths
+   +total.expenditure + diphtheria + gdp + schooling + income.composition.of.resources +
+     percentage.expenditure + polio + population + hiv.aids + status, data = df_life_clean)
+
+summary(fm1)
+
+# Now the coefficient is fixed, we run VIF again:
+
+vif(fm1)
+
+# As GDP and percentage expenditure are highly correlated, it seems to also cause multicolinearity. It is not reasonable for GDP to be negatively correlated with life expectancy, so we drop percentage expenditure because it is more correlated with life expectancy than GDP.
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+fm2 <- lm(life.expectancy ~ alcohol + hepatitis.b + measles + thinness.5.9.years +
+     thinness.1.19.years + adult.mortality + under.five.deaths
+   +total.expenditure + diphtheria + schooling + income.composition.of.resources +
+     percentage.expenditure + polio + population + hiv.aids + status, data = df_life_clean)
+
+
+summary(fm2)
+
+vif(fm2)
+
+# Thinness 5-9 years and thinness 10-19 years now have a high VIF, so we must drop one variable. Referring to the correlation matrix, we drop thinness 1-19.
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+fm3 <- lm(life.expectancy ~ alcohol + hepatitis.b + measles + thinness.5.9.years +
+    adult.mortality + under.five.deaths
+   +total.expenditure + diphtheria + schooling + income.composition.of.resources +
+     percentage.expenditure + polio + population + hiv.aids + status, data = df_life_clean)
+
+summary(fm3)
+
+vif(fm3)
+
+# As schooling and income composition of resources now have a high VIF, we drop schooling.
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+fm4 <- lm(life.expectancy ~ alcohol + hepatitis.b + measles + thinness.5.9.years +
+    adult.mortality + under.five.deaths
+   +total.expenditure + diphtheria + income.composition.of.resources +
+     percentage.expenditure + polio + population + hiv.aids + status, data = df_life_clean)
+
+summary(fm4)
+
+vif(fm4)
+
+# As polio, diphtheria, and hepatitis.b are all vaccines, they should have a positive relationship with life expectancy. However, they are highly correlated with each other. Therefore, we must drop two of the three.
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+fm5 <- lm(life.expectancy ~ alcohol + measles + thinness.5.9.years +
+    adult.mortality + under.five.deaths
+   +total.expenditure + diphtheria + income.composition.of.resources +
+     percentage.expenditure + population + hiv.aids + status, data = df_life_clean)
+
+summary(fm5)
+
+vif(fm5)
+```
+
+# Model
+
+## Transformation and Main Effect Model
+
+Before modeling, strongly skewed predictors—under-five deaths, percentage expenditure, population, and deaths per 1,000 live births due to HIV/AIDS (ages 0–4), motivate log-transformations: **(log(under.five.deaths + 1), log(percentage.expenditure + 1), log(population + 1), log(hiv.aids + 1)**. The main-effects model incorporated all cleaned and transformed predictors that has the following structure and summary:
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+df_life_clean <- df_life_clean %>%
+  mutate(
+    log_under5 = log(under.five.deaths + 1),
+    log_pctexp = log(percentage.expenditure + 1),
+    log_pop = log(population + 1),
+    log_hiv = log(hiv.aids + 1)
+  )
+```
+
+```{r, echo=FALSE, out.width="100%"}
+knitr::include_graphics("initialmaineffectmodel1.png")
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+first_model <- lm(life.expectancy ~ alcohol + measles + thinness.5.9.years + 
+                    adult.mortality + log_under5 + total.expenditure + 
+                    diphtheria + income.composition.of.resources + log_pctexp + 
+                    log_pop + log_hiv + status, 
+            data = df_life_clean)
+
+summary(first_model)
+AIC(first_model)
+BIC(first_model)
+```
+
+This model achieved an adjusted $R^2$ of about 0.89, but diagnostic plots showed residual curvature and mild heteroskedasticity, indicating that some nonlinear patterns and interactions were still missing. 
+
+```{r, warning=FALSE, echo=FALSE}
+par(mfrow = c(2, 2))
+
+# Residuals vs. Fitted Values with LOESS Smooth
+plot(first_model$fitted.values, residuals(first_model),
+     main = "Residuals vs Fitted",
+     xlab = "Fitted Values",
+     ylab = "Residuals",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red")
+lines(lowess(first_model$fitted.values, residuals(first_model)), col = "green", lwd = 2)
+
+# Normal Q-Q Plot
+qqnorm(residuals(first_model),
+       main = "Normal Q-Q Plot",
+       pch = 20, col = "blue")
+qqline(residuals(first_model), col = "red", lwd = 2)
+
+# Scale-Location Plot
+sqrt_abs_resid <- sqrt(abs(residuals(first_model)))
+plot(first_model$fitted.values, sqrt_abs_resid,
+     main = "Scale-Location",
+     xlab = "Fitted Values",
+     ylab = expression(sqrt("|Residuals|")),
+     pch = 20, col = "blue")
+lines(lowess(first_model$fitted.values, sqrt_abs_resid), col = "red", lwd = 2)
+
+# Residuals vs. Leverage Plot
+plot(first_model, which = 5,
+     main = "Residuals vs Leverage",
+     pch = 20, col = "blue")
+```
+```{r, warning=FALSE, message=FALSE, include=FALSE, results='hide'}
+# Reset plotting layout to default (1 plot)
+par(mfrow = c(1, 1))
+
+hist(residuals(first_model), breaks = 30, col = "skyblue",
+     main = "Histogram of Residuals",
+     xlab = "Residuals")
+```
+
+After performing backward AIC, the reduced model's structure and summary look as follows.
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+# Backward Elimination
+first_model <- lm(life.expectancy ~ alcohol + measles + thinness.5.9.years + 
+                    adult.mortality + log_under5 + total.expenditure + 
+                    diphtheria + income.composition.of.resources + log_pctexp + 
+                    log_pop + log_hiv + status, 
+            data = df_life_clean)
+
+first_model <- step(
+  first_model,
+  direction = "backward"
+)
+
+summary(first_model)
+AIC(first_model)
+BIC(first_model)
+```
+
+```{r, echo=FALSE, out.width="100%"}
+knitr::include_graphics("maineffectmodel.png")
+```
+
+\[\begin{array}{c c c c c c}
+\hline
+ & \text{Number of Predictors} & \text{R\_squared} &
+ \text{Adjusted R\_squared} & \text{F-statistics} & \text{MSE}\\
+ \hline
+ \text{Main Effect Model} & 11 & 0.8952 & 0.8941 & 850.3 &
+ 8.983529 \\
+ \hline
+\end{array}\]
+
+Although backward AIC selection simplified the model and removed some predictors, these diagnostics motivated more complex modeling strategies.
+
+## Interaction Model
+
+To capture potential synergistic effects between predictors, we introduced interaction terms informed by biological relationships and significance patterns from the main-effects model. The model has the following structure:
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+reduced_intmodel <- lm(
+  life.expectancy ~ 
+    alcohol + thinness.5.9.years + 
+    adult.mortality + log_under5 + total.expenditure + diphtheria + 
+    income.composition.of.resources + log_pctexp + log_pop + 
+    log_hiv + status +
+    alcohol:thinness.5.9.years +
+    adult.mortality:log_hiv +
+    log_under5:income.composition.of.resources,
+  
+  data = df_life_clean)
+
+summary(reduced_intmodel)
+AIC(reduced_intmodel)
+BIC(reduced_intmodel)
+vif(reduced_intmodel, type = "predictor")
+```
+
+```{r, echo=FALSE, out.width="100%"}
+knitr::include_graphics("initialinteractionmodel.png")
+```
+
+After performing the same backward elimination based on AIC, the reduced model's structure and summary looked as follows:
+
+```{r, echo=FALSE, out.width="100%"}
+knitr::include_graphics("interactionmodel.png")
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+reduced_intmodel <- lm(
+  life.expectancy ~ 
+    alcohol + thinness.5.9.years + 
+    adult.mortality + log_under5 + total.expenditure + diphtheria + 
+    income.composition.of.resources + log_pctexp + log_pop + 
+    log_hiv + status +
+    alcohol:thinness.5.9.years +
+    adult.mortality:log_hiv +
+    log_under5:income.composition.of.resources,
+  
+  data = df_life_clean
+)
+
+reduced_intmodel <- step(
+  reduced_intmodel,
+  direction = "backward"
+)
+
+summary(reduced_intmodel)
+AIC(reduced_intmodel)
+BIC(reduced_intmodel)
+vif(reduced_intmodel, type = "predictor")
+```
+
+```{r, warning=FALSE,  message=FALSE, include=FALSE, echo=FALSE}
+par(mfrow = c(2, 2))
+
+# Residuals vs. Fitted Values with LOESS Smooth
+plot(reduced_intmodel$fitted.values, residuals(reduced_intmodel),
+     main = "Residuals vs Fitted",
+     xlab = "Fitted Values",
+     ylab = "Residuals",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red")
+lines(lowess(reduced_intmodel$fitted.values, residuals(reduced_intmodel)), col = "green", lwd = 2)
+
+# Normal Q-Q Plot
+qqnorm(residuals(reduced_intmodel),
+       main = "Normal Q-Q Plot",
+       pch = 20, col = "blue")
+qqline(residuals(reduced_intmodel), col = "red", lwd = 2)
+
+# Scale-Location Plot
+sqrt_abs_resid <- sqrt(abs(residuals(reduced_intmodel)))
+plot(reduced_intmodel$fitted.values, sqrt_abs_resid,
+     main = "Scale-Location",
+     xlab = "Fitted Values",
+     ylab = expression(sqrt("|Residuals|")),
+     pch = 20, col = "blue")
+lines(lowess(reduced_intmodel$fitted.values, sqrt_abs_resid), col = "red", lwd = 2)
+
+# Residuals vs. Leverage Plot
+plot(reduced_intmodel, which = 5,
+     main = "Residuals vs Leverage",
+     pch = 20, col = "blue")
+
+```
+```{r, warning=FALSE,  message=FALSE, include=FALSE, results='hide'}
+# Reset plotting layout to default (1 plot)
+par(mfrow = c(1, 1))
+
+hist(residuals(reduced_intmodel), breaks = 30, col = "skyblue",
+     main = "Histogram of Residuals",
+     xlab = "Residuals")
+```
+
+\[\begin{array}{c c c c c c}
+\hline
+ & \text{Number of Predictors} & \text{R\_squared} &
+ \text{Adjusted R\_squared} & \text{F-statistics} & \text{MSE}\\
+ \hline
+ \text{Interaction Model} & 12 & 0.8994 & 0.8983 & 814.8 &
+ 8.625933 \\
+ \hline
+\end{array}\]
+
+Increasing values of $R^2$ and $R_{adj}^2$ indicate adding interaction terms and then performing the backward elimination based on AIC was beneficial. However, the model remained overly complex relative to its predictive improvement.
+
+## Polynomial-Interaction Model
+
+To address residual curvature without overcomplicating the model, we built a polynomial-interaction model by adding a quadratic term for adult mortality and keeping only the two meaningful interactions (alcohol × thinness and adult mortality × log(HIV)). This improved the nonlinear fit, and all retained predictors had VIF values below 4.
+
+The final model is:
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+poly_model <- lm(
+  life.expectancy ~ 
+    alcohol + thinness.5.9.years + 
+    log_under5 + total.expenditure + diphtheria + 
+    income.composition.of.resources + log_pctexp + log_pop + 
+    log_hiv + adult.mortality + I(adult.mortality^2) +
+    alcohol:thinness.5.9.years + adult.mortality:log_hiv,
+  data = df_life_clean
+)
+
+summary(poly_model)
+AIC(poly_model)
+BIC(poly_model)
+vif(poly_model, type = 'predictor')
+```
+
+```{r, echo=FALSE, out.width="100%"}
+knitr::include_graphics("polynomialmodel.png")
+```
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+poly_model <- lm(
+  life.expectancy ~ 
+    alcohol + thinness.5.9.years + 
+    log_under5 + total.expenditure + diphtheria + 
+    income.composition.of.resources + log_pctexp + log_pop + 
+    log_hiv + adult.mortality + I(adult.mortality^2) +
+    alcohol:thinness.5.9.years + adult.mortality:log_hiv,
+  data = df_life_clean
+)
+
+poly_model <- step(
+  poly_model,
+  direction = "backward"
+)
+
+summary(poly_model)
+AIC(poly_model)
+BIC(poly_model)
+vif(poly_model, type = 'predictor')
+```
+  
+The expanded model underwent backward AIC selection with the following summary:
+
+\[\begin{array}{c c c c c c}
+\hline
+ & \text{Number of Predictors} & \text{R\_squared} &
+ \text{Adjusted R\_squared} & \text{F-statistics} & \text{MSE}\\
+ \hline
+ \text{Polynomial Model} & 13 & 0.9227 & 0.9218 & 1004 &
+ 6.622935 \\
+ \hline
+\end{array}\]
+
+The $R^2$ value increases to 0.923 and the $R_{adj}^2$ value increases to 0.922, while reducing the number of predictors.
+
+## Model Selection
+
+After building the models, we performed model selection based on the following factors: AIC, BIC, adjusted $R^2$, multiple $R^2$, and PRESS. Below is a comprehensive table that summarizes the findings:
+
+```{r, warning=FALSE,  message=FALSE, include=FALSE, results='hide'}
+#R2
+R2_first <- summary(first_model)$r.squared
+R2_interaction <- summary(reduced_intmodel)$r.squared
+R2_poly <- summary(poly_model)$r.squared
+
+cat("R2:", R2_first, R2_interaction, R2_poly, "\n")
+
+#Adjusted R2
+adj_R2_first <- summary(first_model)$adj.r.squared
+adj_R2_interaction <- summary(reduced_intmodel)$adj.r.squared
+adj_R2_poly <- summary(poly_model)$adj.r.squared
+
+cat("Adjusted R2:", adj_R2_first, adj_R2_interaction, adj_R2_poly, "\n")
+
+#Cp
+Cp <- function(model) {
+  n <- length(model$residuals)
+  mse <- mean(model$residuals^2)
+  p <- length(coefficients(model))
+  Cp_value <- sum(model$residuals^2) / mse - (n - 2 * p)
+  return(Cp_value)
+}
+
+Cp_first <- Cp(first_model)
+Cp_interaction <- Cp(reduced_intmodel)
+Cp_poly <- Cp(poly_model)
+
+cat("Cp:", Cp_first, Cp_interaction, Cp_poly, "\n")
+
+#AIC
+AIC_first <- AIC(first_model)
+AIC_interaction <- AIC(reduced_intmodel)
+AIC_poly <- AIC(poly_model)
+
+cat("AIC:", AIC_first, AIC_interaction, AIC_poly, "\n")
+
+#BIC
+BIC_first <- BIC(first_model)
+BIC_interaction <- BIC(reduced_intmodel)
+BIC_poly <- BIC(poly_model)
+
+cat("BIC:", BIC_first, BIC_interaction, BIC_poly, "\n")
+
+#PRESS
+PRESS <- function(model) {
+  residuals <- model$residuals
+  h <- lm.influence(model)$hat
+  PRESS_value <- sum((residuals / (1 - h))^2)
+  return(PRESS_value)
+}
+
+PRESS_first <- PRESS(first_model)
+PRESS_interaction <- PRESS(reduced_intmodel)
+PRESS_poly <- PRESS(poly_model)
+
+cat("PRESS:", PRESS_first, PRESS_interaction, PRESS_poly, "\n")
+
+summary(poly_model)$coefficients[, c(1,4)]
+vif(poly_model, type = 'predictor')
+
+```
+
+\[
+\begin{array}{c c c c}
+    \hline
+     & \text{Main Effect Model} &
+     \text{Reduced Interaction Model} & \text{Polynomial Model} \\
+     \hline
+     R^2 & 0.8951983 & 0.89937 & 0.922737 \\
+     R_{adj}^2 & 0.8941455 & 0.8982662 & 0.921818 \\
+     C_p & 24 & 26 & 28 \\
+     AIC & 5597.83 & 5554.864 & 5264.356 \\
+     BIC & 5662.952 & 5624.995 & 5339.497 \\
+     PRESS & 10184.54 & 9805.151 & 7550.819 \\
+     \hline
+\end{array}
+\]
+
+The result is clear, the polynomial-interaction model has the highest multiple and adjusted $R^2$, the lowest AIC, BIC and the smallest PRESS. In terms of Mallow's $C_p$, the p' value for each model is 12, 13, and 14 respectively. While the main effect model has a $C_p$ closest to its p' value, the polynomial-interaction model performs much better on all other criteria. Therefore, it is clear that the polynomial-interaction model is the best preforming model here and is selected to be our final model.
+
+## Model Validation and Diagnostic
+
+```{r, warning=FALSE, echo=FALSE}
+par(mfrow = c(2, 2))
+
+# Residuals vs. Fitted Values with LOESS Smooth
+plot(poly_model$fitted.values, residuals(poly_model),
+     main = "Residuals vs Fitted",
+     xlab = "Fitted Values",
+     ylab = "Residuals",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red")
+lines(lowess(poly_model$fitted.values, residuals(poly_model)), col = "green", lwd = 2)
+
+# Normal Q-Q Plot
+qqnorm(residuals(poly_model),
+       main = "Normal Q-Q Plot",
+       pch = 20, col = "blue")
+qqline(residuals(poly_model), col = "red", lwd = 2)
+
+# Scale-Location Plot
+sqrt_abs_resid <- sqrt(abs(residuals(poly_model)))
+plot(poly_model$fitted.values, sqrt_abs_resid,
+     main = "Scale-Location",
+     xlab = "Fitted Values",
+     ylab = expression(sqrt("|Residuals|")),
+     pch = 20, col = "blue")
+lines(lowess(poly_model$fitted.values, sqrt_abs_resid), col = "red", lwd = 2)
+
+# Residuals vs. Leverage Plot
+plot(poly_model, which = 5,
+     main = "Residuals vs Leverage",
+     pch = 20, col = "blue")
+
+```
+```{r, warning=FALSE,  message=FALSE, include=FALSE, results='hide'}
+# Reset plotting layout to default (1 plot)
+par(mfrow = c(1, 1))
+
+hist(residuals(poly_model), breaks = 30, col = "skyblue",
+     main = "Histogram of Residuals",
+     xlab = "Residuals")
+```
+
+Residuals appeared randomly scattered, the Q–Q plot indicated acceptable normality, and heteroskedasticity improved after applying log-transformations. Overall, the model satisfied the LINE assumptions.
+
+```{r, warning=FALSE,  message=FALSE, include=FALSE, results='hide'}
+MSE_F <- summary(poly_model)$sigma^2
+MSE_F
+
+n <- nobs(poly_model)
+MSPR <- PRESS_poly / n
+MSPR
+```
+
+\[
+\begin{array}{c c c}
+   \hline
+   & \text{MSPR} & \text{$MSE_F$} \\
+   \hline
+   \text{Polynomial Model} & 6.820974 & 6.707767 \\
+   \hline
+\end{array}
+\]
+
+The MSPR was very close to the in-sample MSE_F, indicating that the final model is not overfitted and generalizes well to new data.
+
+# Key Findings
+
+All other variables held constant,
+
+- Every 1% increase in "Deaths per 1 000 live births HIV/AIDS (0-4 years)" 
+is associated with -0.06574 years decrease in life expectancy. This is very
+significant and could be because the data set mostly consisted of developing
+countries, where death by HIV/AIDS from 0-4 years old is more prevalent and 
+frequent cause of death at early years.
+
+
+- A country's income composition of resources has a significant impact on life
+expectancy of their people. The difference between the average life expectancy 
+of countries of the lower quartile and the upper quartile was 19.89 years.
+
+
+```{r, warning=FALSE, results = 'hide', message=FALSE,include=FALSE}
+quantile(df_life_clean$income.composition.of.resources)
+
+mean(df_life_clean$life.expectancy[df_life_clean$income.composition.of.resources >= 0.733]) - 
+  mean(df_life_clean$life.expectancy[df_life_clean$income.composition.of.resources <= 0.491])
+```
+
+ 
+# Limitations and Future Research
+
+- We did not analyse patterns in missingness and just deleted all observations involving entries of NA. If missingness is correlated with an explanatory variable, then deleting these observations would cause bias in our model. This also leads to many lost observations. In the future, we recommend identifying the type of missing data, that is, whether it is MCAR, MAR, or MNAR. Depending on the missing data type, could choose to fill in missing data with mean/median, or other estimations. Furthermore, removed observations could be reintroduced back into the data set after the multicolinearity check because we do not care about NA entries in variables we will not be using.
+
+- The model is only applicable to populations above 100k as we deleted all observations under 100k population. In the future, we recommend finding data for populations under 100k, and also finding other data sets to combine with our original data set. This improves our model as other explanatory variables could be added to our model.
+
+- As the final model includes multiple interaction terms, it is hard to isolate and interpret the effect of a single explanatory variable. While this does not impact the model's predicting power, it could be hard to get bigger picture insights towards how each explanatory variable is impacting life expectancy. A simple model could be considered to draw bigger picture insights.
+
+# References
+
+DataStory Guide. (n.d.). Checking and understanding missing data. https://the.datastory.guide/hc/en-us/articles/4570444289167-Checking-and-Understanding-Missing-Data
+
+Lang, N. (2025, April 16). When Predictors Collide: Mastering VIF in Multicollinear Regression. https://towardsdatascience.com/when-predictors-collide-mastering-vif-in-multicollinear-regression
+ 
+Ford, C. (2018, August 17). Interpreting Log Transformations in a Linear Model. UVA Library. https://library.virginia.edu/data/articles/interpreting-log-transformations-in-a-linear-model
+
+Yamannage, S. N. (2024). Life Expectancy Prediction using Multiple Linear Regression. ResearchGate. https://www.researchgate.net/publication/378182333_Life_Expectancy_Prediction_using_Multiple_Linear_Regression
+ 
+
+
+
+
+
+
+
+
+
+
+ \[
+\begin{tabularx}{\linewidth}{c c X}
+     \hline
+     \text{Name} & \text{Student ID} &
+     \text{Tasks/Responsibilities} \\
+     \hline
+     \text{Kit Mak} & \text{1010787819} &
+     Data Cleaning; EDA; VIF check for multicollinearity; Key findings, 
+     Limitations and Future Directions; Writing the report and presentation \\
+     \hline
+     \text{Vika Permata Joe} & \text{1010309649} &
+     Data Cleaning; Main model building: Checking LINE assumption; Backward elimination; Add interaction terms; 
+     Add polynomial terms; Model selection; Final model validation and 
+     diagnostic; Writing the report and presentation \\
+     \hline
+\end{tabularx}
+\]
